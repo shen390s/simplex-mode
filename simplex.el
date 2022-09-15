@@ -83,15 +83,12 @@
     (setq simplex-compiler
 	  (let ((simplex (executable-find "simplex")))
 	    (if simplex
-		"simplex"
-	      (if (executable-find "simplex")
-		  "simplex"
-		"/bin/touch"))))))
+		simplex
+	      "simplex"))))
+  simplex-compiler)
 
 (defun run-compiler (compiler)
-  (let ((cmd (pcase compiler
-	       ('simplex (mk-simplex-command (buffer-file-name)))
-	       ('simplex (mk-simplex-command (buffer-file-name))))))
+  (let ((cmd (mk-simplex-command (buffer-file-name))))
     (let ((buffer-name "*simplex compilation")
 	  (compilation-mode-hook (cons 'simplex-compilation-mode-hook
 				       compilation-mode-hook)))
@@ -102,19 +99,12 @@
 ;;;###autoload
 (defun simplex-compile ()
   (interactive)
-  (let ((compiler (get-simplex-compiler)))
-    (cond
-     ((string= compiler "simplex")
-      (run-compiler 'simplex))
-     ((string= compiler "simplex")
-      (run-compiler 'simplex))
-     (t (message "unknown simplex compiler %s"
-		 compiler)))))
+  (run-compiler 'simplex))
 
 ;;;###autoload
 (defun simplex-view ()
   (interactive)
-  (let ((dst-file-name (concat (buffer-file-name)
+  (let ((dst-file-name (concat (file-name-sans-extension (buffer-file-name))
                                (simplex-output-ext))))
     (if (file-exists-p dst-file-name)
         (find-file-other-window dst-file-name)
