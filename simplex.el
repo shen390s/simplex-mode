@@ -35,7 +35,7 @@
   "Keymap for simplex mode")
 
 (defconst simplex-font-lock-keywords-1
-  '(("^[ \t]*\\(graph\\|subgraph\\|end\\|loop\\|alt\\|gantt\\|title\\|section\\|dateFormat\\|sequenceDiagram\\|opt\\|participant\\|note\\|else\\|gitGraph\\|options\\)" . font-lock-keyword-face)
+  '(("^\\(@title|@preamble|@abstract|@address|@authors|@book\\)" . font-lock-keyword-face)
     ("^[ \t]*graph[ \t]+\\(TD|\\TB\\|BT\\RL\\|LR\\)" . font-lock-keyword-face)
     ("--\\(.*$\\)" . font-lock-comment-face)
     ("{\\(.*\\)}" . font-lock-string-face)
