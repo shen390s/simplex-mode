@@ -21,7 +21,7 @@
 (defvar simplex-compiler nil
   "The compiler used to generate output")
 
-(defvar simplex-extra-options ""
+(defvar simplex-extra-options " --cjk "
   "Extra compiler options for simplex")
 
 (defvar simplex-mode-map
@@ -34,35 +34,69 @@
     map)
   "Keymap for simplex mode")
 
+(defvar simplex-tab-width 4
+  "tab width in simplex mode")
+
+(defvar simplex-decls
+  '("@abstract" "@address" "@article" "@authors"
+    "@book" "@cfoot" "@chead" "@closing" "@date"
+    "@doublespacing" "@draft" "@endnotes" "@fontsize"
+    "@landscape" "@language" "@lfoot" "@lhead" "@margin-bottom"
+    "@margin-left" "@margin-right" "@margin-top" "@margins"
+    "@newpagesections" "@opening" "@pagestyle" "@preamble"
+    "@recipient" "@report" "@rfoot" "@rhead" "@scrartcl" "@slides"
+    "@signature" "@title" "@tocdepth" "@xeCJK")
+  "simplex mode declaration keywords")
+
+(defvar simplex-length
+  '("baselineskip" "baselinestretch" "columnsep" "columnseprule" "columnwidth"
+    "evensidemargin" "headheight" "oddsidemargin" "paperheight" "paperwidth"
+    "parindent" "parskip" "tabcolsep" "textfloatsep" "textheight" "textwidth"
+    "topmargin")
+  "simplex page control length variable")
+
+(defvar simplex-commands
+  '("appendix" "bfseries" "bold" "cation" "center" "colbreak" "columns"
+    "em" "endcolumns" "endfigure" "endignore" "endnoinclude" "endnotes"
+    "figure" "figures" "float-barrier" "footnotesize" "hfill" "huge"
+    "Huge" "ignore" "image-angle" "image-defaults" "image-height" "image-page"
+    "image-scale" "image-size" "image-trim" "image-width" "image" "italic"
+    "itshape" "large" "LARGE" "Large" "left" "lipsum" "mdseries" "newpage"
+    "noinclude" "noindent" "normalfont" "normalsize" "pagebreak" "pagenumbering"
+    "pagestyle" "reset" "right" "rmfamily" "scriptsize" "scschape" "sffamily"
+    "slshape" "small" "tableofcontents" "thispagestyle" "tiny" "ttfamily"
+    "upshape" "vfill")
+  "simplex commands")
+
+(defvar simplex-other-keywords
+  '("label" ".digraph" ".graph" ".table" "#include")
+  "Other simplex keywords")
+
+(defvar simplex-other-special
+  '(":" "=" "."  "-"   "*" "+"  "!" ">" "%" "#")
+  "Other special chars for simplex")
+
+(defun mk-simplex-match-regexp (keys)
+  (concat "^" (regexp-opt keys t)))
+
 (defconst simplex-font-lock-keywords-1
-  '(("^\\(@title|@preamble|@abstract|@address|@authors|@book\\)" . font-lock-keyword-face)
-    ("^[ \t]*graph[ \t]+\\(TD|\\TB\\|BT\\RL\\|LR\\)" . font-lock-keyword-face)
-    ("--\\(.*$\\)" . font-lock-comment-face)
+  `((,(mk-simplex-match-regexp simplex-decls) . font-lock-keyword-face)
+    (,(mk-simplex-match-regexp simplex-length) . font-lock-variable-name-face)
+    (,(mk-simplex-match-regexp simplex-commands) . font-lock-function-name-face)
+    (,(mk-simplex-match-regexp simplex-other-keywords) . font-lock-type-face)
+    ("%\\(.*$\\)" . font-lock-comment-face)
     ("{\\(.*\\)}" . font-lock-string-face)
-    (":\\([^%\012]*\\)[^%\012]*$" . font-lock-warning-face)
+;;    (":\\([^%\012]*\\)[^%\012]*$" . font-lock-warning-face)
     )
   "keyword in simplex mode"
   )
 
-(defconst simplex-new-scope-regexp
-  "^[ \t]*\\(loop\\|opt\\|subgraph\\|graph\\|sequenceDiagram\\|gantt\\|gitGraph\\|{\\)\\([ \t]*\\|$\\)"
-  "keyword to start a new scope(indent level)")
-
-(defconst simplex-end-scope-regexp
-  "^[ \t]*\\(end\\|}\\)\\([ \t]*\\|$\\)"
-  "keyword for end a scope(maybe also start a new scope)")
-
-(defconst simplex-section-regexp
-  "^[ \t]*\\(section\\)[ \t]+"
-  "section keyword")
-
-(defconst simplex-else-regexp
-  "^[ \t]*\\(else\\)"
-  "else keyword")
-
-(defconst simplex-alt-regexp
-  "^[ \t]*\\(alt\\)"
-  "alt keyword")
+(defun is-simplex-special ()
+  (let ((simplex-special (append simplex-decls simplex-length
+				 simplex-commands simplex-other-keywords
+				 simplex-other-special)))
+    (let ((m-rexp (concat "^" (regexp-opt simplex-special t))))
+      (looking-at m-rexp))))
 
 (defun simplex-output-ext ()
   "get the extendsion of generated file"
@@ -119,120 +153,64 @@
   `(when simplex-debug-enabled
      (message ,fmt ,@args)))
 
+(defun simplex-determine-ctx ()
+  (save-excursion
+    (setf ctx nil)
+    (while (and (not ctx)
+		(not (bobp)))
+      (beginning-of-line)
+      (let ((ctx-tag (cond
+		      ((looking-at (mk-simplex-match-regexp simplex-decls))
+		       (if (looking-at "@title")
+			   'title
+			 'other-decl))
+		      ((looking-at (mk-simplex-match-regexp simplex-other-special))
+		       'special-block)
+		      ((looking-at "^[\t\b ]*$")
+		       'paragraph)
+		      ((looking-at (mk-simplex-match-regexp (append simplex-length
+								    simplex-commands)))
+		       'command-or-length)
+		      (t 'unknown))))
+	(if (not (eq ctx-tag 'unknown))
+	    (setf ctx (list ctx-tag (line-number-at-pos)))
+	  (forward-line -1))))
+    (when (not ctx)
+      (setf ctx (list 'doc-start 1)))
+    ctx))
+      
 (defun simplex-indent-line ()
-  "indent current line in simplex mode"
+  "Indent current line in simplex mode"
   (interactive)
-  (simplex-debug "line no @ %d\n" (line-number-at-pos))
   (beginning-of-line)
   (if (bobp)
       (indent-line-to 0)
-    (let (cur-indent)
-      (cond
-       ((looking-at simplex-end-scope-regexp)
-        (progn
-          (simplex-debug "found end scope\n")
-          (save-excursion
-            (forward-line -1)
-            (if (or (looking-at simplex-new-scope-regexp)
-                    (looking-at simplex-alt-regexp))
-                (setq cur-indent (current-indentation))
-              (setq cur-indent (- (current-indentation) tab-width)))
-            (if (< cur-indent 0)
-                (setq cur-indent 0)))))
-       ((looking-at simplex-section-regexp)
-        (let ((found-section nil)
-              (need-search t))
-          (simplex-debug "found section\n")
-          (save-excursion
-            (while need-search
-              (forward-line -1)
-              (cond
-               ((looking-at simplex-section-regexp)
-                (progn
-                  (simplex-debug "found section\n")
-                  (setq found-section t)
-                  (setq cur-indent (current-indentation))
-                  (simplex-debug "cur-indent %d\n" cur-indent)
-                  (setq need-search nil)))
-               ((or (looking-at simplex-new-scope-regexp)
-                    (looking-at simplex-alt-regexp))
-                (progn
-                  (simplex-debug "found new scope\n")
-                  (setq cur-indent (+ (current-indentation) tab-width))
-                  (simplex-debug "cur-indent %d\n" cur-indent)
-                  (setq need-search nil)))
-               ((looking-at simplex-end-scope-regexp)
-                (progn
-                  (simplex-debug "found end scope\n")
-                  (setq cur-indent (current-indentation))
-                  (simplex-debug "cur-indent %d\n" cur-indent)
-                  (setq need-search nil)))
-               ((bobp)
-                (progn
-                  (setq cur-indent 0)
-                  (setq need-search nil)))
-               (t t))))
-          (if (< cur-indent 0)
-              (setq cur-indent 0))))
-       ((looking-at simplex-else-regexp)
-        (let ((need-search t))
-          (simplex-debug "else\n")
-          (save-excursion
-            (while need-search
-              (forward-line -1)
-              (cond
-               ((or (looking-at simplex-else-regexp)
-                    (looking-at simplex-alt-regexp))
-                (progn
-                  (simplex-debug "found matched alt/else\n")
-                  (setq cur-indent (current-indentation))
-                  (simplex-debug "cur-indent %d\n" cur-indent)
-                  (setq need-search nil)))
-               ((looking-at simplex-end-scope-regexp)
-                (progn
-                  (simplex-debug "found end\n")
-                  (setq cur-indent (- (current-indentation) tab-width))
-                  (setq need-search nil)))
-               ((bobp)
-                (progn
-                  (setq cur-indent 0)))
-               (t t))))))
-       (t
-        (let ((need-search t)
-              (start-scope (looking-at simplex-new-scope-regexp)))
-          (simplex-debug "normal indent\n")
-          (save-excursion
-            (while need-search
-              (forward-line -1)
-              (cond
-               ((looking-at simplex-end-scope-regexp)
-                (progn
-                  (simplex-debug "found end scope\n")
-                  (setq cur-indent (current-indentation))
-                  (simplex-debug "cur-indent %d\n" cur-indent)
-                  (setq need-search nil)))
-                ((or (looking-at simplex-new-scope-regexp)
-                     (looking-at simplex-alt-regexp))
-                 (progn
-                   (simplex-debug "found begin scope\n")
-                   (setq cur-indent (+ (current-indentation) tab-width))
-                   (simplex-debug "cur-indent %d\n" cur-indent)
-                   (setq need-search nil)))
-                ((looking-at simplex-section-regexp)
-                 (progn
-                   (simplex-debug "found section \n")
-                   (if start-scope
-                       (setq cur-indent (current-indentation))
-                     (setq cur-indent (+ (current-indentation) tab-width)))
-                   (simplex-debug "cur-indent %d\n" cur-indent)
-                   (setq need-search nil)))
-                ((bobp)
-                 (progn
-                   (setq cur-indent 0)
-                   (setq need-search nil)))))))))
-      (if cur-indent
-          (indent-line-to cur-indent)
-        (indent-line-to 0)))))
+    (progn
+      (let ((ctx (simplex-determine-ctx))
+	    (cur-line (line-number-at-pos)))
+	(let ((cur-indent 
+	       (pcase (car ctx)
+		 ('doc-start 0)
+		 ('title
+		  (if (= (second ctx) cur-line)
+		      0
+		    (* 2 simplex-tab-width)))
+		 ('other-decl
+		  (if (= (second ctx) cur-line)
+		      0
+		    simplex-tab-width))
+		 ('paragraph simplex-tab-width)
+		 ('command-or-length
+		  (if (= (second ctx) cur-line)
+		      0
+		    simplex-tab-width))
+		 ('special-block -1)
+		 ('comment -1)
+		 (t -1))))
+	  (simplex-debug "line %d ctx %s indent %d"
+	    		 cur-line ctx cur-indent)
+	  (when (>= cur-indent 0)
+	    (indent-line-to cur-indent)))))))
 
 ;;;###autoload
 (defun simplex-mode ()
@@ -244,7 +222,7 @@
        '(simplex-font-lock-keywords-1))
   (set (make-local-variable 'indent-line-function)
        'simplex-indent-line)
-  (set (make-local-variable 'comment-start) "--")
+  (set (make-local-variable 'comment-start) "^%")
   (set (make-local-variable 'comment-end) "")
   (setq major-mode 'simplex-mode)
   (setq mode-name "simplex")
