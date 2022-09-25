@@ -21,7 +21,7 @@
 (defvar simplex-compiler nil
   "The compiler used to generate output")
 
-(defvar simplex-extra-options " --cjk "
+(defvar simplex-extra-options ""
   "Extra compiler options for simplex")
 
 (defvar simplex-mode-map
@@ -56,7 +56,7 @@
   "simplex page control length variable")
 
 (defvar simplex-commands
-  '("appendix" "bfseries" "bold" "cation" "center" "colbreak" "columns"
+  '("appendix" "bfseries" "bold" "caption" "center" "colbreak" "columns"
     "em" "endcolumns" "endfigure" "endignore" "endnoinclude" "endnotes"
     "figure" "figures" "float-barrier" "footnotesize" "hfill" "huge"
     "Huge" "ignore" "image-angle" "image-defaults" "image-height" "image-page"
@@ -69,31 +69,42 @@
   "simplex commands")
 
 (defvar simplex-other-keywords
-  '("label" ".digraph" ".graph" ".table" "#include")
+  '("label" "#include" "#image")
   "Other simplex keywords")
 
+(defvar simplex-extra-blocks
+  '(".digraph" ".graph" ".table" ".ascii"
+    ".code" ".code$" ".comment" ".equation"
+    ".haskell" ".java" ".latex" ".math"
+    ".php" ".python" ".verbatim" ".#" ".@"
+    ".%" ".$" ".!")
+  "Other blocks")
+
 (defvar simplex-other-special
-  '(":" "=" "."  "-"   "*" "+"  "!" ">" "%" "#")
+  '(":" "="  "-"   "*" "+"  "!" ">" "%" "#")
   "Other special chars for simplex")
 
 (defun mk-simplex-match-regexp (keys)
   (concat "^" (regexp-opt keys t)))
 
 (defconst simplex-font-lock-keywords-1
-  `((,(mk-simplex-match-regexp simplex-decls) . font-lock-keyword-face)
+  `(("^\\(@[a-zA-Z][a-zA-Z]*\\)" . font-lock-keyword-face)
+     ;;(,(mk-simplex-match-regexp simplex-decls) . font-lock-keyword-face)
     (,(mk-simplex-match-regexp simplex-length) . font-lock-variable-name-face)
     (,(mk-simplex-match-regexp simplex-commands) . font-lock-function-name-face)
     (,(mk-simplex-match-regexp simplex-other-keywords) . font-lock-type-face)
+    (,(mk-simplex-match-regexp simplex-extra-blocks) . font-lock-preprocessor-face)
+    
     ("%\\(.*$\\)" . font-lock-comment-face)
-    ("{\\(.*\\)}" . font-lock-string-face)
+;;    ("{\\(.*\\)}" . font-lock-string-face)
 ;;    (":\\([^%\012]*\\)[^%\012]*$" . font-lock-warning-face)
     )
-  "keyword in simplex mode"
-  )
+  "keyword in simplex mode")
 
 (defun is-simplex-special ()
   (let ((simplex-special (append simplex-decls simplex-length
 				 simplex-commands simplex-other-keywords
+				 simplex-extra-blocks
 				 simplex-other-special)))
     (let ((m-rexp (concat "^" (regexp-opt simplex-special t))))
       (looking-at m-rexp))))
@@ -146,71 +157,116 @@
 
 ;; disable debug in default
 ;;
-(defvar simplex-debug-enabled nil
+(defvar simplex-debug-enabled t
   "enable/disable debug")
 
 (defmacro simplex-debug (fmt &rest args)
   `(when simplex-debug-enabled
      (message ,fmt ,@args)))
 
-(defun simplex-determine-ctx ()
-  (save-excursion
-    (setf ctx nil)
-    (while (and (not ctx)
-		(not (bobp)))
-      (beginning-of-line)
-      (let ((ctx-tag (cond
-		      ((looking-at (mk-simplex-match-regexp simplex-decls))
-		       (if (looking-at "@title")
-			   'title
-			 'other-decl))
-		      ((looking-at (mk-simplex-match-regexp simplex-other-special))
-		       'special-block)
-		      ((looking-at "^[\t\b ]*$")
-		       'paragraph)
-		      ((looking-at (mk-simplex-match-regexp (append simplex-length
-								    simplex-commands)))
-		       'command-or-length)
-		      (t 'unknown))))
-	(if (not (eq ctx-tag 'unknown))
-	    (setf ctx (list ctx-tag (line-number-at-pos)))
-	  (forward-line -1))))
-    (when (not ctx)
-      (setf ctx (list 'doc-start 1)))
-    ctx))
-      
+(defvar last-indent-line nil
+  "The last line to be indented")
+(defvar last-line-indent nil
+  "The offset of indent of last line")
+
+(defun simplex-last-indent-valid (cur-line)
+  (let ((indent-valid 
+	 (cond
+	  ((or (not last-indent-line)
+	       (not last-line-indent)) nil)
+	  ((< cur-line last-indent-line) nil)
+	  (t (let ((valid 'unknown))
+	       (save-excursion
+		 (goto-line cur-line)
+		 (while (and (eq valid 'unknown)
+			     (> (line-number-at-pos) (+ last-indent-line 1)))
+		   (forward-line -1)
+		   (beginning-of-line)
+		   (cond
+		    ((looking-at "^[\b\t ]*$")
+		     (simplex-debug "line %d is empty"
+				    (line-number-at-pos))
+		     t)
+		    (t (setf valid nil))))
+		 (when (eq valid 'unknown)
+		   (setf valid t))
+		 valid))))))
+    (simplex-debug "cur-line %d last-indent-line %s last-line-indent %s valid %s"
+		   cur-line last-indent-line last-line-indent indent-valid)
+    indent-valid))
+
+(defun simplex-calc-indent ()
+  (let ((cur-indent nil)
+	(cur-line (line-number-at-pos)))
+    (if (not (simplex-last-indent-valid cur-line))
+      (save-excursion
+	(while (and (not cur-indent)
+		    (not (bobp)))
+	  (forward-line -1)
+	  (beginning-of-line)
+	  (cond
+	   ((looking-at "^\\.[\t\b ]+")
+	    (setf cur-indent simplex-tab-width))
+	   ((looking-at "^@title")
+	    (setf cur-indent (* 2 simplex-tab-width)))
+	   ((looking-at (mk-simplex-match-regexp simplex-decls))
+	    (setf cur-indent simplex-tab-width))
+	   ((looking-at "^center[\t\b ]*")
+	    (setf cur-indent (* 3 simplex-tab-width)))
+	   ((looking-at "^\\.#")
+	    (setf cur-indent -1))
+	   ((looking-at "^\\.!")
+	    (setf cur-indent -1))
+	   ((looking-at (mk-simplex-match-regexp simplex-commands))
+	    (setf cur-indent simplex-tab-width))
+	   ((looking-at (mk-simplex-match-regexp simplex-extra-blocks))
+	    (setf cur-indent -1))
+	   ((looking-at (mk-simplex-match-regexp '("=" ".")))
+	    (setf cur-indent simplex-tab-width))
+	   ((looking-at (mk-simplex-match-regexp simplex-other-special))
+	    (setf cur-indent -1))
+	   (t t))
+	  (when cur-indent
+	    (simplex-debug "calc indent according line %d indent %d"
+			   (line-number-at-pos) cur-indent)))
+	(unless cur-indent
+	  (setf cur-indent 0)))
+      (setf cur-indent last-line-indent))
+    (setf last-indent-line cur-line)
+    (setf last-line-indent cur-indent)
+    (simplex-debug "last-indent-line %d last-line-indent %d cur-line %d"
+		   last-indent-line last-line-indent cur-line)
+    last-line-indent))
+
 (defun simplex-indent-line ()
   "Indent current line in simplex mode"
-  (interactive)
-  (beginning-of-line)
   (if (bobp)
       (indent-line-to 0)
-    (progn
-      (let ((ctx (simplex-determine-ctx))
-	    (cur-line (line-number-at-pos)))
-	(let ((cur-indent 
-	       (pcase (car ctx)
-		 ('doc-start 0)
-		 ('title
-		  (if (= (second ctx) cur-line)
-		      0
-		    (* 2 simplex-tab-width)))
-		 ('other-decl
-		  (if (= (second ctx) cur-line)
-		      0
-		    simplex-tab-width))
-		 ('paragraph simplex-tab-width)
-		 ('command-or-length
-		  (if (= (second ctx) cur-line)
-		      0
-		    simplex-tab-width))
-		 ('special-block -1)
-		 ('comment -1)
-		 (t -1))))
-	  (simplex-debug "line %d ctx %s indent %d"
-	    		 cur-line ctx cur-indent)
-	  (when (>= cur-indent 0)
-	    (indent-line-to cur-indent)))))))
+    (let ((cur-indent -1))
+      (cond
+       ((looking-at "^[\b\t ]*$")
+	(simplex-debug "line %d is empty"
+		       (line-number-at-pos))
+	(setf cur-indent -1))
+       ;;((is-simplex-special) (setf cur-indent 0))
+       ((looking-at (concat "^" (regexp-opt (append simplex-decls simplex-length
+						    simplex-commands simplex-other-keywords
+						    simplex-extra-blocks))))
+	(simplex-debug "line %d is declare or keywords"
+		       (line-number-at-pos))
+	(setf cur-indent 0))
+       ((looking-at (concat "^" (regexp-opt simplex-other-special)))
+	(simplex-debug "line %d is special"
+		       (line-number-at-pos))
+	(setf cur-indent 0))
+       (t
+	(simplex-debug "calculating line indent for line %d"
+		       (line-number-at-pos))
+	(setf cur-indent (simplex-calc-indent))))
+      (simplex-debug "line %s indent %d"
+		     (line-number-at-pos) cur-indent)
+      (when (>= cur-indent 0)
+	(indent-line-to cur-indent)))))
 
 ;;;###autoload
 (defun simplex-mode ()
