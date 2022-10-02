@@ -217,6 +217,8 @@
 	    (setf cur-indent -1))
 	   ((looking-at "^\\.!")
 	    (setf cur-indent -1))
+	   ((looking-at "^[=!]+")
+	    (setf cur-indent simplex-tab-width))
 	   ((looking-at (mk-simplex-match-regexp simplex-commands))
 	    (setf cur-indent simplex-tab-width))
 	   ((looking-at (mk-simplex-match-regexp simplex-extra-blocks))
